@@ -2,9 +2,10 @@ import torch
 import torch.nn as nn
 import torch.nn.functional as F
 from timm.models.vision_transformer import Mlp, DropPath
+import torchvision.models as models
 
 import numpy as np
-from model import resnet18
+from model import resnet18 # Your original custom resnet wrapper
 from functools import partial
 
 
@@ -69,7 +70,6 @@ class Block(nn.Module):
 
         self.attn = Attention(dim, num_patches, num_heads=num_heads, qkv_bias=qkv_bias, attn_drop=attn_drop, proj_drop=drop)
         self.ls1 = LayerScale(dim, init_values=init_values) if init_values else nn.Identity()
-        # NOTE: drop path for stochastic depth, we shall see if this is better than dropout here
         self.drop_path1 = DropPath(drop_path) if drop_path > 0. else nn.Identity()
 
         self.norm2 = norm_layer(dim, elementwise_affine=True)
@@ -135,6 +135,39 @@ class LayerNorm(nn.Module):
     def forward(self, x):
         return F.layer_norm(x, x.size()[1:], weight=None, bias=None, eps=1e-05)
 
+# --- HELPER: ADAPTER FOR TORCHVISION MODELS ---
+class TorchVisionAdapter(nn.Module):
+    """
+    Adapts ResNet/VGG features to match the expected (Batch, Channels, Height, Width)
+    and then projects them to (Batch, Embed_Dim, H, W) so they fit the ViT.
+    """
+    def __init__(self, backbone_name, embed_dim):
+        super().__init__()
+        
+        if backbone_name == 'resnet18':
+            m = models.resnet18(pretrained=True)
+            # Remove AvgPool and FC, keep spatial features
+            self.features = nn.Sequential(*list(m.children())[:-2]) 
+            self.out_channels = 512
+            
+        elif backbone_name == 'resnet50':
+            m = models.resnet50(pretrained=True)
+            self.features = nn.Sequential(*list(m.children())[:-2])
+            self.out_channels = 2048
+            
+        elif backbone_name == 'vgg16':
+            m = models.vgg16(pretrained=True)
+            self.features = m.features
+            self.out_channels = 512
+        
+        # Projection layer to match ViT embed_dim
+        self.proj = nn.Conv2d(self.out_channels, embed_dim, kernel_size=1)
+
+    def forward(self, x):
+        x = self.features(x)
+        x = self.proj(x)
+        return x
+
 
 class MaskedAutoencoderViT(nn.Module):
     """ Masked Autoencoder with VisionTransformer backbone
@@ -142,25 +175,53 @@ class MaskedAutoencoderViT(nn.Module):
 
     def __init__(self,
                  nb_cls=80,
-                 img_size=[512, 32] ,
+                 img_size=[512, 32],
                  patch_size=[8, 32],
                  embed_dim=1024,
                  depth=24,
                  num_heads=16,
                  mlp_ratio=4.,
-                 norm_layer=nn.LayerNorm):
+                 norm_layer=nn.LayerNorm,
+                 backbone='custom', # NEW ARGUMENT
+                 use_cnn=True       # NEW ARGUMENT
+                 ):
         super().__init__()
 
         # --------------------------------------------------------------------------
         # MAE encoder specifics
         self.layer_norm = LayerNorm()
-        self.patch_embed = resnet18.ResNet18(embed_dim)
+
+        # --- BACKBONE SELECTION LOGIC ---
+        if not use_cnn:
+            # Identity mapper if no CNN is used (Linear Patch Projection could be added here if raw pixels)
+            # For strict ablation "No CNN", we usually imply a simple Linear Patch Embedding
+            # But for simplicity here, we assume x enters as features or we project it.
+            # Here we use a simple Conv projection to act as "Linear Patch Embed"
+            self.patch_embed = nn.Conv2d(3, embed_dim, kernel_size=patch_size, stride=patch_size)
+            # Note: This changes the effective grid size logic below depending on patch_size
+            # For this code, we assume the input is still compatible.
+        
+        elif backbone == 'custom':
+            # YOUR ORIGINAL CUSTOM RESNET
+            self.patch_embed = resnet18.ResNet18(embed_dim)
+        
+        elif backbone in ['resnet18', 'resnet50', 'vgg16']:
+            # STANDARD TORCHVISION BACKBONES
+            self.patch_embed = TorchVisionAdapter(backbone, embed_dim)
+        
+        else:
+            raise ValueError(f"Unknown backbone: {backbone}")
+
+        # --------------------------------------------------------------------------
+
         self.grid_size = [img_size[0] // patch_size[0], img_size[1] // patch_size[1]]
         self.embed_dim = embed_dim
         self.num_patches = self.grid_size[0] * self.grid_size[1]
         self.mask_token = nn.Parameter(torch.zeros(1, 1, embed_dim))
-        self.pos_embed = nn.Parameter(torch.zeros(1, self.num_patches, embed_dim),
-                                      requires_grad=False)  # fixed sin-cos embedding
+        
+        # Fixed sin-cos embedding
+        self.pos_embed = nn.Parameter(torch.zeros(1, self.num_patches, embed_dim), requires_grad=False)
+        
         self.blocks = nn.ModuleList([
             Block(embed_dim, num_heads, self.num_patches,
                   mlp_ratio, qkv_bias=True, norm_layer=norm_layer)
@@ -223,12 +284,26 @@ class MaskedAutoencoderViT(nn.Module):
         # embed patches
         x = self.layer_norm(x)
         x = self.patch_embed(x)
+        
+        # Flatten logic: (B, C, H, W) -> (B, C, N) -> (B, N, C)
         b, c, w, h = x.shape
         x = x.view(b, c, -1).permute(0, 2, 1)
+        
         # masking: length -> length * mask_ratio
         if use_masking:
             x = self.random_masking(x, mask_ratio, max_span_length)
-        x = x + self.pos_embed
+        
+        # Add Positional Embedding (Check for size mismatch in case of different backbones)
+        if x.shape[1] == self.pos_embed.shape[1]:
+            x = x + self.pos_embed
+        else:
+             # Interpolate Pos Embed if sizes mismatch (e.g. different backbone strides)
+             # This is a safety catch.
+            pos_emb_resized = F.interpolate(
+                self.pos_embed.permute(0, 2, 1), size=x.shape[1], mode='linear'
+            ).permute(0, 2, 1)
+            x = x + pos_emb_resized
+
         # apply Transformer blocks
         for blk in self.blocks:
             x = blk(x)
@@ -241,15 +316,17 @@ class MaskedAutoencoderViT(nn.Module):
         return x
 
 
-def create_model(nb_cls, img_size, **kwargs):
+def create_model(nb_cls, img_size, backbone='custom', use_cnn=True, **kwargs):
     model = MaskedAutoencoderViT(nb_cls,
                                  img_size=img_size,
                                  patch_size=(4, 64),
                                  embed_dim=768,
-                                 depth=4,
-                                 num_heads=6,
+                                 # Allow depth/heads to be overridden by kwargs
+                                 depth=kwargs.get('depth', 4), 
+                                 num_heads=kwargs.get('heads', 6),
                                  mlp_ratio=4,
                                  norm_layer=partial(nn.LayerNorm, eps=1e-6),
+                                 backbone=backbone, # PASS BACKBONE
+                                 use_cnn=use_cnn,   # PASS USE_CNN FLAG
                                  **kwargs)
     return model
-
