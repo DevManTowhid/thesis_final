@@ -72,7 +72,8 @@ def main():
 
     best_cer, best_wer = 1e+6, 1e+6
     train_loss = 0.0
-    folder_name = str(args.total_iter) + "_" + str(args.train_bs)
+    # Include the dataset name in the folder to avoid confusion
+    folder_name = f"{args.exp_name}_{args.data_name}_{args.total_iter}_{args.train_bs}"
     #### ---- train & eval ---- ####
     # Wrap the range with tqdm to show the progress bar
     progress_bar = tqdm(range(1, args.total_iter), desc="Training", unit="iter")
