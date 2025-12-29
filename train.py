@@ -38,7 +38,7 @@ def main():
     logger.info(json.dumps(vars(args), indent=4, sort_keys=True))
     writer = SummaryWriter(args.save_dir)
 
-    model = HTR_VT.create_model(nb_cls=args.nb_cls, img_size=args.img_size[::-1])
+    model = HTR_VT.create_model(nb_cls=args.nb_cls, img_size=args.img_size[::-1], decoder_layers=args.decoder_layers)
 
     total_param = sum(p.numel() for p in model.parameters())
     logger.info('total_param is {}'.format(total_param))
@@ -74,7 +74,18 @@ def main():
     train_loss = 0.0
     # Include the dataset name in the folder to avoid confusion
     # Use args.subcommand instead of args.data_path
-    folder_name = f"{args.exp_name}_{args.subcommand}_{args.total_iter}_{args.train_bs}"
+    folder_name = (
+    f"{args.exp_name}_{args.subcommand}_"
+    f"It{args.total_iter}_"
+    f"Bs{args.train_bs}_"
+    f"{args.backbone}_"           # custom, resnet18, vgg16
+    f"L{args.depth}_"              # Encoder Layers
+    f"H{args.heads}_"              # Attention Heads
+    f"DecL{args.decoder_layers}_"   # Decoder Layers (Table 8)
+    f"M{args.mask_ratio}_"         # Mask Ratio (e.g., 0.4)
+    f"S{args.max_span_length}_"    # Max Span Length (e.g., 8)
+    f"{args.optimizer}"            # sam or adamw
+)
     #### ---- train & eval ---- ####
     # Wrap the range with tqdm to show the progress bar
     progress_bar = tqdm(range(1, args.total_iter), desc="Training", unit="iter")
