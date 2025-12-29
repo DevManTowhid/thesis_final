@@ -23,6 +23,10 @@ def main():
     model = HTR_VT.create_model(nb_cls=args.nb_cls, img_size=args.img_size[::-1])
 
     # --- MODIFIED: Load based on the defined 'total_iter' ---
+    # 1. Construct the path to the specific iteration folder (MATCHING TRAIN.PY LOGIC)
+    # We reconstruct the folder name exactly as train.py does:
+    folder_name = f"{args.exp_name}_{args.subcommand}_{args.total_iter}_{args.train_bs}"
+    iter_path = os.path.join(args.save_dir, f'iter_{folder_name}', 'best_CER.pth')
     # 1. Construct the path to the specific iteration folder
     iter_path = os.path.join(args.save_dir, f'iter_{args.total_iter}', 'best_CER.pth')
     
