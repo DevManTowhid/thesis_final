@@ -33,11 +33,12 @@ class Attention(nn.Module):
         attn = (q @ k.transpose(-2, -1)) * self.scale
         attn = attn.softmax(dim=-1)
         attn = self.attn_drop(attn)
+        attn_weights = self.attn_drop(attn) # <--- Keep this
 
         x = (attn @ v).transpose(1, 2).reshape(B, N, C)
         x = self.proj(x)
         x = self.proj_drop(x)
-        return x
+        return x, attn_weights # <--- Return the weights as a second output
 
 class LayerScale(nn.Module):
     def __init__(self, dim, init_values=1e-5, inplace=False):
@@ -78,6 +79,11 @@ class Block(nn.Module):
         self.drop_path2 = DropPath(drop_path) if drop_path > 0. else nn.Identity()
 
     def forward(self, x):
+        # Capture the weights from the attention layer
+        y, attn_weights = self.attn(self.norm1(x))
+    
+        if return_attention:
+            return attn_weights # Toggle to exit early with weights
         x = x + self.drop_path1(self.ls1(self.attn(self.norm1(x))))
         x = x + self.drop_path2(self.ls2(self.mlp(self.norm2(x))))
         return x
