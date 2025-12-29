@@ -27,8 +27,7 @@ def main():
     # We reconstruct the folder name exactly as train.py does:
     folder_name = f"{args.exp_name}_{args.subcommand}_{args.total_iter}_{args.train_bs}"
     iter_path = os.path.join(args.save_dir, f'iter_{folder_name}', 'best_CER.pth')
-    # 1. Construct the path to the specific iteration folder
-    iter_path = os.path.join(args.save_dir, f'iter_{args.total_iter}', 'best_CER.pth')
+   
     
     # 2. Logic: Check if that specific folder exists
     if os.path.exists(iter_path):
