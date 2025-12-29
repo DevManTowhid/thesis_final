@@ -113,5 +113,17 @@ def get_args_parser():
     LAM.add_argument('--test-data-list', type=str, default='./data/LAM/test.ln',
                      help='test data list')
     LAM.add_argument('--nb-cls', default=90, type=int, help='nb of classes, IAM=79+1, READ2016=89+1')
-
+    # NEW: Architecture Control
+    parser.add_argument('--backbone', type=str, default='custom', 
+                        choices=['custom', 'resnet18', 'resnet50', 'vgg16'],
+                        help='Choose the CNN Feature Extractor backbone')
+    
+    # NEW: Ablation Flags
+    parser.add_argument('--optimizer', type=str, default='sam', choices=['sam', 'adamw'])
+    parser.add_argument('--use_cnn', action='store_true', default=True)
+    parser.add_argument('--no_cnn', action='store_false', dest='use_cnn')
+    parser.add_argument('--mask_ratio', type=float, default=0.4)
+    parser.add_argument('--attn_mask_ratio', type=float, default=0.1)
+    
+    parser.set_defaults(use_cnn=True)
     return parser.parse_args()
