@@ -183,7 +183,8 @@ class MaskedAutoencoderViT(nn.Module):
                  mlp_ratio=4.,
                  norm_layer=nn.LayerNorm,
                  backbone='custom', # NEW ARGUMENT
-                 use_cnn=True       # NEW ARGUMENT
+                 use_cnn=True,
+                 decoder_layers=0 # NEW ARGUMENT
                  ):
         super().__init__()
 
@@ -211,6 +212,20 @@ class MaskedAutoencoderViT(nn.Module):
         
         else:
             raise ValueError(f"Unknown backbone: {backbone}")
+        # --- NEW: DECODER ABLATION SETUP ---
+        self.decoder_layers_count = decoder_layers
+        if self.decoder_layers_count > 0:
+            # Define standard Transformer Decoder layer
+            decoder_layer = nn.TransformerDecoderLayer(
+                d_model=embed_dim, 
+                nhead=num_heads, 
+                dim_feedforward=int(embed_dim * mlp_ratio),
+                activation='gelu',
+                batch_first=True
+            )
+            self.decoder = nn.TransformerDecoder(decoder_layer, num_layers=decoder_layers)
+        else:
+            self.decoder = None
 
         # --------------------------------------------------------------------------
 
@@ -307,7 +322,13 @@ class MaskedAutoencoderViT(nn.Module):
         # apply Transformer blocks
         for blk in self.blocks:
             x = blk(x)
+        # --- NEW: DECODER PATH (Table 8 Ablation) ---
+        if self.decoder is not None:
+            # We use the encoder output 'x' as both the target and the memory
+            # This refines global context before the CTC head
+            x = self.decoder(tgt=x, memory=x)
 
+        
         x = self.norm(x)
         # To CTC Loss
         x = self.head(x)
@@ -328,5 +349,6 @@ def create_model(nb_cls, img_size, backbone='custom', use_cnn=True, **kwargs):
                                  norm_layer=partial(nn.LayerNorm, eps=1e-6),
                                  backbone=backbone, # PASS BACKBONE
                                  use_cnn=use_cnn,   # PASS USE_CNN FLAG
+                                 decoder_layers=kwargs.get('decoder_layers', 0),
                                  **kwargs)
     return model
