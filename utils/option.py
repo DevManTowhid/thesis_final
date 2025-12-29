@@ -126,4 +126,6 @@ def get_args_parser():
     parser.add_argument('--attn_mask_ratio', type=float, default=0.1)
     
     parser.set_defaults(use_cnn=True)
+    parser.add_argument('--decoder-layers', type=int, default=0, 
+                        help='Number of Transformer decoder layers to add (default: 0)')
     return parser.parse_args()
