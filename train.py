@@ -15,6 +15,7 @@ from functools import partial
 from tqdm import tqdm 
 
 def compute_loss(args, model, image, batch_size, criterion, text, length):
+    # We still use the args for training logic, just not for folder naming
     preds = model(image, args.mask_ratio, args.max_span_length, use_masking=True)
     preds = preds.float()
     preds_size = torch.IntTensor([preds.size(1)] * batch_size).cuda()
@@ -27,10 +28,11 @@ def compute_loss(args, model, image, batch_size, criterion, text, length):
 
 
 def main():
-
+    # 1. Parse Arguments
     args = option.get_args_parser()
     torch.manual_seed(args.seed)
 
+    # 2. Setup Main Save Directory (e.g. ./output/test_run)
     args.save_dir = os.path.join(args.out_dir, args.exp_name)
     os.makedirs(args.save_dir, exist_ok=True)
 
@@ -38,7 +40,13 @@ def main():
     logger.info(json.dumps(vars(args), indent=4, sort_keys=True))
     writer = SummaryWriter(args.save_dir)
 
-    model = HTR_VT.create_model(nb_cls=args.nb_cls, img_size=args.img_size[::-1], decoder_layers=args.decoder_layers)
+    # 3. Create Model
+    # Note: We do NOT pass decoder_layers or backbone args here since they aren't in your command.
+    # The model will use its internal defaults.
+    model = HTR_VT.create_model(
+        nb_cls=args.nb_cls, 
+        img_size=args.img_size[::-1]
+    )
 
     total_param = sum(p.numel() for p in model.parameters())
     logger.info('total_param is {}'.format(total_param))
@@ -48,6 +56,7 @@ def main():
     model_ema = utils.ModelEma(model, args.ema_decay)
     model.zero_grad()
 
+    # 4. Load Data
     logger.info('Loading train loader...')
     train_dataset = dataset.myLoadDS(args.train_data_list, args.data_path, args.img_size)
     train_loader = torch.utils.data.DataLoader(train_dataset,
@@ -72,19 +81,13 @@ def main():
 
     best_cer, best_wer = 1e+6, 1e+6
     train_loss = 0.0
-    # Include the dataset name in the folder to avoid confusion
-    # Use args.subcommand instead of args.data_path
-    folder_name = (
-    f"{args.exp_name}_{args.subcommand}_"
-    f"It{args.total_iter}_"
-    f"Bs{args.train_bs}_"
-   
-    f"M{args.mask_ratio}_"         # Mask Ratio (e.g., 0.4)
-    f"S{args.max_span_length}_"    # Max Span Length (e.g., 8)
+
+    # --- 5. FOLDER NAMING LOGIC (STRICTLY BASED ON YOUR REQUEST) ---
+    # Format: {exp_name}_{data}_{current_iter}_{batch_size}
+    # args.subcommand = data (e.g. IAM or READ)
+    folder_name = f"{args.exp_name}_{args.subcommand}_{args.total_iter}_{args.train_bs}"
     
-)
-    #### ---- train & eval ---- ####
-    # Wrap the range with tqdm to show the progress bar
+    #### ---- 6. Training Loop ---- ####
     progress_bar = tqdm(range(1, args.total_iter), desc="Training", unit="iter")
 
     for nb_iter in progress_bar:
@@ -96,20 +99,21 @@ def main():
         image = batch[0].cuda()
         text, length = converter.encode(batch[1])
         batch_size = image.size(0)
+        
+        # We pass args to compute_loss because it needs mask_ratio/span_length for training
         loss = compute_loss(args, model, image, batch_size, criterion, text, length)
         loss.backward()
         optimizer.first_step(zero_grad=True)
         compute_loss(args, model, image, batch_size, criterion, text, length).backward()
         optimizer.second_step(zero_grad=True)
+        
         model.zero_grad()
         model_ema.update(model, num_updates=nb_iter / 2)
         train_loss += loss.item()
 
         if nb_iter % args.print_iter == 0:
             train_loss_avg = train_loss / args.print_iter
-
             logger.info(f'Iter : {nb_iter} \t LR : {current_lr:0.5f} \t training loss : {train_loss_avg:0.5f} \t ' )
-
             writer.add_scalar('./Train/lr', current_lr, nb_iter)
             writer.add_scalar('./Train/train_loss', train_loss_avg, nb_iter)
             train_loss = 0.0
@@ -122,8 +126,8 @@ def main():
                                                                              val_loader,
                                                                              converter)
 
-                # --- MODIFIED SAVING LOGIC STARTS HERE ---
-                # Define the specific folder based on total_iter
+                # --- 7. SAVING CHECKPOINTS ---
+                # Saves to: ./output/{exp_name}/iter_{exp_name}_{data}_{iter}_{bs}/
                 iter_save_dir = os.path.join(args.save_dir, f'iter_{folder_name}')
                 os.makedirs(iter_save_dir, exist_ok=True)
 
@@ -135,7 +139,6 @@ def main():
                         'state_dict_ema': model_ema.ema.state_dict(),
                         'optimizer': optimizer.state_dict(),
                     }
-                    # Save into the new folder
                     torch.save(checkpoint, os.path.join(iter_save_dir, 'best_CER.pth'))
 
                 if val_wer < best_wer:
@@ -146,13 +149,9 @@ def main():
                         'state_dict_ema': model_ema.ema.state_dict(),
                         'optimizer': optimizer.state_dict(),
                     }
-                    # Save into the new folder
                     torch.save(checkpoint, os.path.join(iter_save_dir, 'best_WER.pth'))
-                # --- MODIFIED SAVING LOGIC ENDS HERE ---
-
-                logger.info(
-                    f'Val. loss : {val_loss:0.3f} \t CER : {val_cer:0.4f} \t WER : {val_wer:0.4f} \t ')
-
+                
+                logger.info(f'Val. loss : {val_loss:0.3f} \t CER : {val_cer:0.4f} \t WER : {val_wer:0.4f} \t ')
                 writer.add_scalar('./VAL/CER', val_cer, nb_iter)
                 writer.add_scalar('./VAL/WER', val_wer, nb_iter)
                 writer.add_scalar('./VAL/bestCER', best_cer, nb_iter)
