@@ -78,14 +78,18 @@ class Block(nn.Module):
         self.ls2 = LayerScale(dim, init_values=init_values) if init_values else nn.Identity()
         self.drop_path2 = DropPath(drop_path) if drop_path > 0. else nn.Identity()
 
-    def forward(self, x):
-        # Capture the weights from the attention layer
-        y, attn_weights = self.attn(self.norm1(x))
-    
-        if return_attention:
-            return attn_weights # Toggle to exit early with weights
-        x = x + self.drop_path1(self.ls1(self.attn(self.norm1(x))))
+    def forward(self, x, return_attention=False):
+        # 1. Run Attention (returns feature + weights)
+        x_attn, attn_weights = self.attn(self.norm1(x))
+        
+        # 2. Add Residual (Use x_attn, NOT the tuple)
+        x = x + self.drop_path1(self.ls1(x_attn))
+
+        # 3. MLP Block
         x = x + self.drop_path2(self.ls2(self.mlp(self.norm2(x))))
+        
+        if return_attention:
+            return attn_weights
         return x
 
 
@@ -191,6 +195,7 @@ class MaskedAutoencoderViT(nn.Module):
                  backbone='custom', # NEW ARGUMENT
                  use_cnn=True,
                  decoder_layers=0 # NEW ARGUMENT
+                 **kwargs
                  ):
         super().__init__()
 
@@ -344,17 +349,28 @@ class MaskedAutoencoderViT(nn.Module):
 
 
 def create_model(nb_cls, img_size, backbone='custom', use_cnn=True, **kwargs):
-    model = MaskedAutoencoderViT(nb_cls,
-                                 img_size=img_size,
-                                 patch_size=(4, 64),
-                                 embed_dim=768,
-                                 # Allow depth/heads to be overridden by kwargs
-                                 depth=kwargs.get('depth', 4), 
-                                 num_heads=kwargs.get('heads', 6),
-                                 mlp_ratio=4,
-                                 norm_layer=partial(nn.LayerNorm, eps=1e-6),
-                                 backbone=backbone, # PASS BACKBONE
-                                 use_cnn=use_cnn,   # PASS USE_CNN FLAG
-                                 decoder_layers=kwargs.get('decoder_layers', 0),
-                                 **kwargs)
+    # --- FIX: POP ARGUMENTS FROM KWARGS ---
+    # This prevents sending them twice (once explicitly below, and once inside **kwargs)
+    decoder_layers = kwargs.pop('decoder_layers', 0)
+    depth = kwargs.pop('depth', 4)
+    heads = kwargs.pop('heads', 6) 
+    
+    # Clean up other potential duplicate keys if necessary
+    kwargs.pop('num_heads', None) 
+
+    model = MaskedAutoencoderViT(
+        nb_cls=nb_cls,
+        img_size=img_size,
+        patch_size=(4, 64),
+        embed_dim=768,
+        depth=depth,
+        num_heads=heads,
+        mlp_ratio=4,
+        norm_layer=partial(nn.LayerNorm, eps=1e-6),
+        backbone=backbone,
+        use_cnn=use_cnn,
+        decoder_layers=decoder_layers,
+        **kwargs  # Now this is safe because we removed the conflicting keys above
+    )
+    
     return model
