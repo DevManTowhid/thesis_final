@@ -78,13 +78,10 @@ def main():
     f"{args.exp_name}_{args.subcommand}_"
     f"It{args.total_iter}_"
     f"Bs{args.train_bs}_"
-    f"{args.backbone}_"           # custom, resnet18, vgg16
-    f"L{args.depth}_"              # Encoder Layers
-    f"H{args.heads}_"              # Attention Heads
-    f"DecL{args.decoder_layers}_"   # Decoder Layers (Table 8)
+   
     f"M{args.mask_ratio}_"         # Mask Ratio (e.g., 0.4)
     f"S{args.max_span_length}_"    # Max Span Length (e.g., 8)
-    f"{args.optimizer}"            # sam or adamw
+    
 )
     #### ---- train & eval ---- ####
     # Wrap the range with tqdm to show the progress bar
